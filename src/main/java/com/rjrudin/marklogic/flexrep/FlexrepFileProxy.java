@@ -12,6 +12,7 @@ import javax.xml.parsers.DocumentBuilderFactory;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpMethod;
 import org.springframework.http.client.ClientHttpRequest;
 import org.springframework.http.client.ClientHttpResponse;
@@ -46,18 +47,15 @@ public class FlexrepFileProxy {
     }
 
     public void proxy(HttpServletRequest request, HttpServletResponse response) throws Exception {
-        File file = writeRequestToFile(request);
 
-        // Delay for a second to simulate network guard delay
+        // Write the master HTTP request to a file
+        File requestFile = writeRequestToFile(request);
 
-        // Read file back in and send request via RestTemplate
-        sendRequestToReplica(file);
-
-        // Get response back, write as file
-
-        // Delay for a second
+        // Read file back in and send request via RestTemplate, then write the response to a file
+        File responseFile = sendRequestToReplica(requestFile);
 
         // Read file back in and write as response to original request
+        returnResponseToMaster(responseFile, response);
     }
 
     /**
@@ -110,9 +108,9 @@ public class FlexrepFileProxy {
      * @param file
      * @throws Exception
      */
-    private void sendRequestToReplica(File file) throws Exception {
+    private File sendRequestToReplica(File file) throws Exception {
         String url = String.format("http://%s:%d/apply.xqy", host, port);
-        restTemplate.execute(url, HttpMethod.POST, new RequestCallback() {
+        return restTemplate.execute(url, HttpMethod.POST, new RequestCallback() {
             @Override
             public void doWithRequest(ClientHttpRequest request) throws IOException {
                 try {
@@ -121,26 +119,76 @@ public class FlexrepFileProxy {
                     throw new RuntimeException(e);
                 }
             }
-        }, new ResponseExtractor<String>() {
+        }, new ResponseExtractor<File>() {
             @Override
-            public String extractData(ClientHttpResponse response) throws IOException {
-                logger.info("Response headers: " + response.getHeaders());
-                String body = new String(FileCopyUtils.copyToByteArray(response.getBody()));
-                logger.info("Response body: " + body);
-                return body;
+            public File extractData(ClientHttpResponse response) throws IOException {
+                return writeReplicaResponseToFile(file, response);
             }
         });
     }
 
     /**
+     * Write the replica HTTP response to a simple XML file.
+     * 
+     * TODO Test for errors.
+     * 
+     * @param requestFile
+     * @param response
+     * @return
+     * @throws IOException
+     */
+    private File writeReplicaResponseToFile(File requestFile, ClientHttpResponse response) throws IOException {
+        StringBuilder xml = new StringBuilder("<flexrep-response><headers>");
+        HttpHeaders headers = response.getHeaders();
+        for (String key : headers.keySet()) {
+            xml.append("<header><name>").append(key).append("</name>");
+            for (String val : headers.get(key)) {
+                xml.append("<value>").append(val).append("</value>");
+            }
+            xml.append("</header>");
+        }
+        xml.append("</headers>");
+
+        xml.append("<body>");
+        String body = new String(FileCopyUtils.copyToByteArray(response.getBody()));
+        xml.append(escapeBody(body)).append("</body></flexrep-response>");
+
+        File responseFile = new File("build", "response-" + requestFile.getName());
+        FileCopyUtils.copy(xml.toString().getBytes(), responseFile);
+        return responseFile;
+    }
+
+    private void returnResponseToMaster(File responseFile, HttpServletResponse response) throws Exception {
+        Document doc = docBuilderFactory.newDocumentBuilder().parse(responseFile);
+        NodeList headerNodes = doc.getDocumentElement().getElementsByTagName("headers").item(0).getChildNodes();
+        for (int i = 0; i < headerNodes.getLength(); i++) {
+            Element header = (Element) headerNodes.item(i);
+            String name = header.getFirstChild().getTextContent();
+            NodeList valueNodes = header.getElementsByTagName("value");
+            for (int j = 0; j < valueNodes.getLength(); j++) {
+                String value = valueNodes.item(j).getTextContent();
+                logger.debug("Adding master response header: " + name + "; values: " + value);
+                response.addHeader(name, value);
+            }
+        }
+
+        String body = doc.getDocumentElement().getElementsByTagName("body").item(0).getTextContent();
+        body = unescapeBody(body);
+        if (logger.isDebugEnabled()) {
+            logger.debug("Writing replica response body to master response: " + body);
+        }
+        FileCopyUtils.copy(body.getBytes(), response.getOutputStream());
+    }
+
+    /**
      * Use crummy JAXP APIs to read in XML (only using JAXP because it doesn't introduce any dependencies).
      * 
-     * @param file
+     * @param requestFile
      * @param request
      * @throws Exception
      */
-    private void copyFileDataToRequest(File file, ClientHttpRequest request) throws Exception {
-        Document doc = docBuilderFactory.newDocumentBuilder().parse(file);
+    private void copyFileDataToRequest(File requestFile, ClientHttpRequest request) throws Exception {
+        Document doc = docBuilderFactory.newDocumentBuilder().parse(requestFile);
         NodeList headerNodes = doc.getDocumentElement().getElementsByTagName("headers").item(0).getChildNodes();
         for (int i = 0; i < headerNodes.getLength(); i++) {
             Element header = (Element) headerNodes.item(i);
@@ -150,12 +198,15 @@ public class FlexrepFileProxy {
             for (int j = 0; j < valueNodes.getLength(); j++) {
                 values.add(valueNodes.item(j).getTextContent());
             }
-            logger.debug("Adding header: " + name + "; values: " + values);
+            logger.debug("Adding replica request header: " + name + "; values: " + values);
             request.getHeaders().put(name, values);
         }
 
         String body = doc.getDocumentElement().getElementsByTagName("body").item(0).getTextContent();
         body = unescapeBody(body);
+        if (logger.isDebugEnabled()) {
+            logger.debug("Writing master request body to replica request: " + body);
+        }
         FileCopyUtils.copy(body.getBytes(), request.getBody());
     }
 
