@@ -87,6 +87,7 @@ public class FlexrepFileProxy {
 
         String id = getFlexrepId(request);
         File file = new File("build", id + ".xml");
+        logger.info("Writing request file to: " + file.getAbsolutePath());
         FileCopyUtils.copy(xml.toString().getBytes(), file);
         return file;
     }
@@ -122,6 +123,7 @@ public class FlexrepFileProxy {
         }, new ResponseExtractor<File>() {
             @Override
             public File extractData(ClientHttpResponse response) throws IOException {
+                logger.info(String.format("Processing replica HTTP response with status %s", response.getStatusText()));
                 return writeReplicaResponseToFile(file, response);
             }
         });
@@ -129,8 +131,6 @@ public class FlexrepFileProxy {
 
     /**
      * Write the replica HTTP response to a simple XML file.
-     * 
-     * TODO Test for errors.
      * 
      * @param requestFile
      * @param response
@@ -154,10 +154,18 @@ public class FlexrepFileProxy {
         xml.append(escapeBody(body)).append("</body></flexrep-response>");
 
         File responseFile = new File("build", "response-" + requestFile.getName());
+        logger.info("Writing response file to: " + responseFile.getAbsolutePath());
         FileCopyUtils.copy(xml.toString().getBytes(), responseFile);
         return responseFile;
     }
 
+    /**
+     * Read in the response file and populate the headers and body of the master HTTP response.
+     * 
+     * @param responseFile
+     * @param response
+     * @throws Exception
+     */
     private void returnResponseToMaster(File responseFile, HttpServletResponse response) throws Exception {
         Document doc = docBuilderFactory.newDocumentBuilder().parse(responseFile);
         NodeList headerNodes = doc.getDocumentElement().getElementsByTagName("headers").item(0).getChildNodes();
@@ -167,7 +175,9 @@ public class FlexrepFileProxy {
             NodeList valueNodes = header.getElementsByTagName("value");
             for (int j = 0; j < valueNodes.getLength(); j++) {
                 String value = valueNodes.item(j).getTextContent();
-                logger.debug("Adding master response header: " + name + "; values: " + value);
+                if (logger.isDebugEnabled()) {
+                    logger.debug("Adding master response header: " + name + "; values: " + value);
+                }
                 response.addHeader(name, value);
             }
         }
@@ -198,7 +208,9 @@ public class FlexrepFileProxy {
             for (int j = 0; j < valueNodes.getLength(); j++) {
                 values.add(valueNodes.item(j).getTextContent());
             }
-            logger.debug("Adding replica request header: " + name + "; values: " + values);
+            if (logger.isDebugEnabled()) {
+                logger.debug("Adding replica request header: " + name + "; values: " + values);
+            }
             request.getHeaders().put(name, values);
         }
 

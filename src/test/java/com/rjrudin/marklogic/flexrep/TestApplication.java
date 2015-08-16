@@ -8,6 +8,9 @@ import org.apache.http.auth.UsernamePasswordCredentials;
 import org.apache.http.client.HttpClient;
 import org.apache.http.impl.client.BasicCredentialsProvider;
 import org.apache.http.impl.client.HttpClientBuilder;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.boot.SpringApplication;
 import org.springframework.boot.autoconfigure.EnableAutoConfiguration;
 import org.springframework.http.client.HttpComponentsClientHttpRequestFactory;
@@ -23,23 +26,34 @@ import org.springframework.web.client.RestTemplate;
 @EnableAutoConfiguration(exclude = { org.springframework.boot.autoconfigure.security.SecurityAutoConfiguration.class })
 public class TestApplication {
 
+    private Logger logger = LoggerFactory.getLogger(getClass());
+
     private FlexrepFileProxy flexrepProxy;
+
+    @Value("${mlReplicaHost}")
+    private String mlReplicaHost;
+
+    @Value("${mlReplicaPort}")
+    private int mlReplicaPort;
+
+    @Value("${mlReplicaUsername}")
+    private String mlReplicaUsername;
+
+    @Value("${mlReplicaPassword}")
+    private String mlReplicaPassword;
 
     public static void main(String[] args) throws Exception {
         SpringApplication.run(TestApplication.class, args);
     }
 
-    public TestApplication() {
-        String host = "localhost";
-        int port = 8051;
-
-        RestTemplate t = newRestTemplate(host, port, "admin", "admin");
-        flexrepProxy = new FlexrepFileProxy(t, host, port);
-    }
-
     @RequestMapping("/apply.xqy")
     @ResponseBody
     public void proxy(HttpServletRequest request, HttpServletResponse response) throws Exception {
+        if (flexrepProxy == null) {
+            logger.info(String.format("Proxying requests to %s:%d", mlReplicaHost, mlReplicaPort));
+            RestTemplate t = newRestTemplate(mlReplicaHost, mlReplicaPort, mlReplicaUsername, mlReplicaPassword);
+            flexrepProxy = new FlexrepFileProxy(t, mlReplicaHost, mlReplicaPort);
+        }
         flexrepProxy.proxy(request, response);
     }
 
