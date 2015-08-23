@@ -40,6 +40,7 @@ public class ReplicaProxy implements InitializingBean {
     private Logger logger = LoggerFactory.getLogger(getClass());
 
     private RestTemplate restTemplate;
+    private NetworkGuard networkGuard;
 
     private String host;
     private int port;
@@ -50,6 +51,7 @@ public class ReplicaProxy implements InitializingBean {
 
     public ReplicaProxy() {
         this.docBuilderFactory = DocumentBuilderFactory.newInstance();
+        this.networkGuard = new NetworkGuard();
     }
 
     @Override
@@ -69,9 +71,9 @@ public class ReplicaProxy implements InitializingBean {
      * @param file
      * @throws Exception
      */
-    public File sendRequestToReplica(File file) throws Exception {
+    public void sendRequestToReplica(File file) throws Exception {
         String url = String.format("http://%s:%d/apply.xqy", host, port);
-        return restTemplate.execute(url, HttpMethod.POST, new RequestCallback() {
+        restTemplate.execute(url, HttpMethod.POST, new RequestCallback() {
             @Override
             public void doWithRequest(ClientHttpRequest request) throws IOException {
                 try {
@@ -80,11 +82,12 @@ public class ReplicaProxy implements InitializingBean {
                     throw new RuntimeException(e);
                 }
             }
-        }, new ResponseExtractor<File>() {
+        }, new ResponseExtractor<Void>() {
             @Override
-            public File extractData(ClientHttpResponse response) throws IOException {
+            public Void extractData(ClientHttpResponse response) throws IOException {
                 logger.info(String.format("Processing replica HTTP response with status %s", response.getStatusText()));
-                return writeReplicaResponseToFile(file, response);
+                writeReplicaResponseToFile(file, response);
+                return null;
             }
         });
     }
@@ -97,7 +100,7 @@ public class ReplicaProxy implements InitializingBean {
      * @return
      * @throws IOException
      */
-    private File writeReplicaResponseToFile(File requestFile, ClientHttpResponse response) throws IOException {
+    private void writeReplicaResponseToFile(File requestFile, ClientHttpResponse response) throws IOException {
         StringBuilder xml = new StringBuilder("<flexrep-response><headers>");
         HttpHeaders headers = response.getHeaders();
         for (String key : headers.keySet()) {
@@ -111,12 +114,9 @@ public class ReplicaProxy implements InitializingBean {
 
         xml.append("<body>");
         String body = new String(FileCopyUtils.copyToByteArray(response.getBody()));
-        xml.append(escapeBody(body)).append("</body></flexrep-response>");
+        xml.append(XmlUtil.escapeBody(body)).append("</body></flexrep-response>");
 
-        File responseFile = new File("network-guard/from-replica", "response-" + requestFile.getName());
-        logger.info("Writing response file to: " + responseFile.getAbsolutePath());
-        FileCopyUtils.copy(xml.toString().getBytes(), responseFile);
-        return responseFile;
+        networkGuard.writeResponseFromReplicaToFile(xml.toString(), requestFile);
     }
 
     /**
@@ -144,40 +144,11 @@ public class ReplicaProxy implements InitializingBean {
         }
 
         String body = doc.getDocumentElement().getElementsByTagName("body").item(0).getTextContent();
-        body = unescapeBody(body);
+        body = XmlUtil.unescapeBody(body);
         if (logger.isDebugEnabled()) {
             logger.debug("Writing master request body to replica request: " + body);
         }
         FileCopyUtils.copy(body.getBytes(), request.getBody());
-    }
-
-    /**
-     * In addition to escaping certain XML characters, we need to replace a carriage return + a line feed, because when
-     * it's read back in, only the line feed is preserved. But flexrep isn't happy with the multipart data unless the
-     * carriage returns are there as well.
-     * 
-     * @param body
-     * @return
-     */
-    private String escapeBody(String body) {
-        body = body.replace("<", "&lt;");
-        body = body.replace(">", "&gt;");
-        body = body.replace("\r\n", "CARRIAGERETURN\n");
-        return body;
-    }
-
-    /**
-     * Unescape XML characters, and also replace our special token for preserving a carriage return followed by a line
-     * feed.
-     * 
-     * @param body
-     * @return
-     */
-    private String unescapeBody(String body) {
-        body = body.replace("&lt;", "<");
-        body = body.replace("&gt;", ">");
-        body = body.replace("CARRIAGERETURN\n", "\r\n");
-        return body;
     }
 
     private RestTemplate newRestTemplate(String host, int port, String username, String password) {

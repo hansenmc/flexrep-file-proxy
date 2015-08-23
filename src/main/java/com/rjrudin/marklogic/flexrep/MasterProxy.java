@@ -16,23 +16,24 @@ import org.w3c.dom.Element;
 import org.w3c.dom.NodeList;
 
 /**
- * Example of receiving an HTTP request from a master ML; writing it to file; reading it back in and making an HTTP
- * request to a replica ML; writing the response to file; then reading the response back in and returning that to the
- * master ML.
+ * This class acts as a proxy to the master ML instance. It receives an HTTP request from the master, writes it to a
+ * file, waits for a response file to show up, and then sends an HTTP response back to the master.
  */
-public class FlexrepFileProxy {
+public class MasterProxy {
 
     private Logger logger = LoggerFactory.getLogger(getClass());
 
     private DocumentBuilderFactory docBuilderFactory;
+    private NetworkGuard networkGuard;
 
-    public FlexrepFileProxy() {
+    public MasterProxy() {
         this.docBuilderFactory = DocumentBuilderFactory.newInstance();
+        this.networkGuard = new NetworkGuard();
     }
 
     public void proxy(HttpServletRequest request, HttpServletResponse response) throws Exception {
-        File requestFile = writeHttpRequestToFile(request);
-        File responseFile = waitForResponseFileToShowUp(requestFile);
+        String flexrepId = writeHttpRequestToFile(request);
+        File responseFile = networkGuard.waitForResponseFileToShowUp(flexrepId);
         returnResponseToMaster(responseFile, response);
     }
 
@@ -44,7 +45,7 @@ public class FlexrepFileProxy {
      * @return
      * @throws IOException
      */
-    private File writeHttpRequestToFile(HttpServletRequest request) throws IOException {
+    private String writeHttpRequestToFile(HttpServletRequest request) throws IOException {
         StringBuilder xml = new StringBuilder("<flexrep-request><headers>");
         Enumeration<String> names = request.getHeaderNames();
         while (names.hasMoreElements()) {
@@ -61,13 +62,11 @@ public class FlexrepFileProxy {
 
         xml.append("<body>");
         String body = new String(FileCopyUtils.copyToByteArray(request.getInputStream()));
-        xml.append(escapeBody(body)).append("</body></flexrep-request>");
+        xml.append(XmlUtil.escapeBody(body)).append("</body></flexrep-request>");
 
         String id = getFlexrepId(request);
-        File file = new File("network-guard/to-replica", id + ".xml");
-        logger.info("Writing request file to: " + file.getAbsolutePath());
-        FileCopyUtils.copy(xml.toString().getBytes(), file);
-        return file;
+        networkGuard.writeRequestFromMasterToFile(xml.toString(), id);
+        return id;
     }
 
     /**
@@ -79,28 +78,6 @@ public class FlexrepFileProxy {
     private String getFlexrepId(HttpServletRequest request) {
         String type = request.getHeader("Content-type");
         return type.replace("multipart/flexible-replication; boundary=", "");
-    }
-
-    /**
-     * Very crude implementation of waiting for a file to show up.
-     * 
-     * @param requestFile
-     * @return
-     */
-    private File waitForResponseFileToShowUp(File requestFile) {
-        File dir = new File("network-guard/from-replica");
-        File responseFile = new File(dir, "response-" + requestFile.getName());
-        while (!responseFile.exists()) {
-            if (logger.isDebugEnabled()) {
-                logger.debug("Waiting for file to show up: " + responseFile.getAbsolutePath());
-            }
-            try {
-                Thread.sleep(1000);
-            } catch (InterruptedException ie) {
-                // Ignore
-            }
-        }
-        return responseFile;
     }
 
     /**
@@ -127,39 +104,10 @@ public class FlexrepFileProxy {
         }
 
         String body = doc.getDocumentElement().getElementsByTagName("body").item(0).getTextContent();
-        body = unescapeBody(body);
+        body = XmlUtil.unescapeBody(body);
         if (logger.isDebugEnabled()) {
             logger.debug("Writing replica response body to master response: " + body);
         }
         FileCopyUtils.copy(body.getBytes(), response.getOutputStream());
-    }
-
-    /**
-     * In addition to escaping certain XML characters, we need to replace a carriage return + a line feed, because when
-     * it's read back in, only the line feed is preserved. But flexrep isn't happy with the multipart data unless the
-     * carriage returns are there as well.
-     * 
-     * @param body
-     * @return
-     */
-    private String escapeBody(String body) {
-        body = body.replace("<", "&lt;");
-        body = body.replace(">", "&gt;");
-        body = body.replace("\r\n", "CARRIAGERETURN\n");
-        return body;
-    }
-
-    /**
-     * Unescape XML characters, and also replace our special token for preserving a carriage return followed by a line
-     * feed.
-     * 
-     * @param body
-     * @return
-     */
-    private String unescapeBody(String body) {
-        body = body.replace("&lt;", "<");
-        body = body.replace("&gt;", ">");
-        body = body.replace("CARRIAGERETURN\n", "\r\n");
-        return body;
     }
 }

@@ -16,7 +16,7 @@ import org.springframework.web.bind.annotation.ResponseBody;
 @EnableAutoConfiguration(exclude = { org.springframework.boot.autoconfigure.security.SecurityAutoConfiguration.class })
 public class TestApplication {
 
-    private FlexrepFileProxy flexrepProxy = new FlexrepFileProxy();
+    private MasterProxy flexrepProxy = new MasterProxy();
 
     public static void main(String[] args) throws Exception {
         SpringApplication.run(TestApplication.class, args);

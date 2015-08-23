@@ -15,7 +15,7 @@
   <camelContext id="camel" xmlns="http://camel.apache.org/schema/spring">
 
     <route>
-      <from uri="file://network-guard/to-replica" />
+      <from uri="file://network-guard/from-master" />
       <to uri="bean:replicaProxy" />
     </route>
 
