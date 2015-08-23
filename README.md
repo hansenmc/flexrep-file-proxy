@@ -17,7 +17,8 @@ and my HTTP flexrep server is on port 8077.
 1. Now fire up the TestApplication in this repository, which will start an instance of Tomcat that listens for requests
 on port 8076 (I use Eclipse to run this - you can easily import this as an Eclipse project by first running "gradle eclipse"
 to generate the project files).
-1. Then run "gradle camel" to start up the Camel instance that talks to the replica HTTP server.
+1. Then run "gradle camel" to start up the Camel instance that talks to the replica HTTP server. Verif that the 
+connection properties in src/main/resources/META-INF/camel-routes.xml are correct. 
 1. Change the master flexrep config to send requests to port 8076 instead of 8077.
 1. Insert a document using qconsole into the master database - it should replicate successfully, and you should see some
 logging from both Tomcat and Camel. 
