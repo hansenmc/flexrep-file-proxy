@@ -2,9 +2,7 @@ package com.rjrudin.marklogic.flexrep;
 
 import java.io.File;
 import java.io.IOException;
-import java.util.ArrayList;
 import java.util.Enumeration;
-import java.util.List;
 
 import javax.servlet.http.HttpServletRequest;
 import javax.servlet.http.HttpServletResponse;
@@ -12,14 +10,7 @@ import javax.xml.parsers.DocumentBuilderFactory;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import org.springframework.http.HttpHeaders;
-import org.springframework.http.HttpMethod;
-import org.springframework.http.client.ClientHttpRequest;
-import org.springframework.http.client.ClientHttpResponse;
 import org.springframework.util.FileCopyUtils;
-import org.springframework.web.client.RequestCallback;
-import org.springframework.web.client.ResponseExtractor;
-import org.springframework.web.client.RestTemplate;
 import org.w3c.dom.Document;
 import org.w3c.dom.Element;
 import org.w3c.dom.NodeList;
@@ -33,28 +24,15 @@ public class FlexrepFileProxy {
 
     private Logger logger = LoggerFactory.getLogger(getClass());
 
-    private RestTemplate restTemplate;
-    private String host;
-    private int port;
-
     private DocumentBuilderFactory docBuilderFactory;
 
-    public FlexrepFileProxy(RestTemplate restTemplate, String host, int port) {
-        this.restTemplate = restTemplate;
-        this.host = host;
-        this.port = port;
+    public FlexrepFileProxy() {
         this.docBuilderFactory = DocumentBuilderFactory.newInstance();
     }
 
     public void proxy(HttpServletRequest request, HttpServletResponse response) throws Exception {
-
-        // Write the master HTTP request to a file
-        File requestFile = writeRequestToFile(request);
-
-        // Read file back in and send request via RestTemplate, then write the response to a file
-        File responseFile = sendRequestToReplica(requestFile);
-
-        // Read file back in and write as response to original request
+        File requestFile = writeHttpRequestToFile(request);
+        File responseFile = waitForResponseFileToShowUp(requestFile);
         returnResponseToMaster(responseFile, response);
     }
 
@@ -66,7 +44,7 @@ public class FlexrepFileProxy {
      * @return
      * @throws IOException
      */
-    private File writeRequestToFile(HttpServletRequest request) throws IOException {
+    private File writeHttpRequestToFile(HttpServletRequest request) throws IOException {
         StringBuilder xml = new StringBuilder("<flexrep-request><headers>");
         Enumeration<String> names = request.getHeaderNames();
         while (names.hasMoreElements()) {
@@ -86,7 +64,7 @@ public class FlexrepFileProxy {
         xml.append(escapeBody(body)).append("</body></flexrep-request>");
 
         String id = getFlexrepId(request);
-        File file = new File("build", id + ".xml");
+        File file = new File("network-guard/to-replica", id + ".xml");
         logger.info("Writing request file to: " + file.getAbsolutePath());
         FileCopyUtils.copy(xml.toString().getBytes(), file);
         return file;
@@ -104,58 +82,24 @@ public class FlexrepFileProxy {
     }
 
     /**
-     * Read the file in and use its contents to construct an HTTP request to send to the replica server.
-     * 
-     * @param file
-     * @throws Exception
-     */
-    private File sendRequestToReplica(File file) throws Exception {
-        String url = String.format("http://%s:%d/apply.xqy", host, port);
-        return restTemplate.execute(url, HttpMethod.POST, new RequestCallback() {
-            @Override
-            public void doWithRequest(ClientHttpRequest request) throws IOException {
-                try {
-                    copyFileDataToRequest(file, request);
-                } catch (Exception e) {
-                    throw new RuntimeException(e);
-                }
-            }
-        }, new ResponseExtractor<File>() {
-            @Override
-            public File extractData(ClientHttpResponse response) throws IOException {
-                logger.info(String.format("Processing replica HTTP response with status %s", response.getStatusText()));
-                return writeReplicaResponseToFile(file, response);
-            }
-        });
-    }
-
-    /**
-     * Write the replica HTTP response to a simple XML file.
+     * Very crude implementation of waiting for a file to show up.
      * 
      * @param requestFile
-     * @param response
      * @return
-     * @throws IOException
      */
-    private File writeReplicaResponseToFile(File requestFile, ClientHttpResponse response) throws IOException {
-        StringBuilder xml = new StringBuilder("<flexrep-response><headers>");
-        HttpHeaders headers = response.getHeaders();
-        for (String key : headers.keySet()) {
-            xml.append("<header><name>").append(key).append("</name>");
-            for (String val : headers.get(key)) {
-                xml.append("<value>").append(val).append("</value>");
+    private File waitForResponseFileToShowUp(File requestFile) {
+        File dir = new File("network-guard/from-replica");
+        File responseFile = new File(dir, "response-" + requestFile.getName());
+        while (!responseFile.exists()) {
+            if (logger.isDebugEnabled()) {
+                logger.debug("Waiting for file to show up: " + responseFile.getAbsolutePath());
             }
-            xml.append("</header>");
+            try {
+                Thread.sleep(1000);
+            } catch (InterruptedException ie) {
+                // Ignore
+            }
         }
-        xml.append("</headers>");
-
-        xml.append("<body>");
-        String body = new String(FileCopyUtils.copyToByteArray(response.getBody()));
-        xml.append(escapeBody(body)).append("</body></flexrep-response>");
-
-        File responseFile = new File("build", "response-" + requestFile.getName());
-        logger.info("Writing response file to: " + responseFile.getAbsolutePath());
-        FileCopyUtils.copy(xml.toString().getBytes(), responseFile);
         return responseFile;
     }
 
@@ -188,38 +132,6 @@ public class FlexrepFileProxy {
             logger.debug("Writing replica response body to master response: " + body);
         }
         FileCopyUtils.copy(body.getBytes(), response.getOutputStream());
-    }
-
-    /**
-     * Use crummy JAXP APIs to read in XML (only using JAXP because it doesn't introduce any dependencies).
-     * 
-     * @param requestFile
-     * @param request
-     * @throws Exception
-     */
-    private void copyFileDataToRequest(File requestFile, ClientHttpRequest request) throws Exception {
-        Document doc = docBuilderFactory.newDocumentBuilder().parse(requestFile);
-        NodeList headerNodes = doc.getDocumentElement().getElementsByTagName("headers").item(0).getChildNodes();
-        for (int i = 0; i < headerNodes.getLength(); i++) {
-            Element header = (Element) headerNodes.item(i);
-            String name = header.getFirstChild().getTextContent();
-            List<String> values = new ArrayList<String>();
-            NodeList valueNodes = header.getElementsByTagName("value");
-            for (int j = 0; j < valueNodes.getLength(); j++) {
-                values.add(valueNodes.item(j).getTextContent());
-            }
-            if (logger.isDebugEnabled()) {
-                logger.debug("Adding replica request header: " + name + "; values: " + values);
-            }
-            request.getHeaders().put(name, values);
-        }
-
-        String body = doc.getDocumentElement().getElementsByTagName("body").item(0).getTextContent();
-        body = unescapeBody(body);
-        if (logger.isDebugEnabled()) {
-            logger.debug("Writing master request body to replica request: " + body);
-        }
-        FileCopyUtils.copy(body.getBytes(), request.getBody());
     }
 
     /**

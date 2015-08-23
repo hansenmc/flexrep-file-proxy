@@ -1,0 +1,24 @@
+<?xml version="1.0" encoding="UTF-8"?>
+
+<beans xmlns="http://www.springframework.org/schema/beans" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+  xsi:schemaLocation="
+       http://www.springframework.org/schema/beans http://www.springframework.org/schema/beans/spring-beans.xsd
+       http://camel.apache.org/schema/spring http://camel.apache.org/schema/spring/camel-spring.xsd">
+
+  <bean id="replicaProxy" class="com.rjrudin.marklogic.flexrep.ReplicaProxy">
+    <property name="host" value="localhost" />
+    <property name="port" value="8077" />
+    <property name="username" value="admin" />
+    <property name="password" value="admin" />
+  </bean>
+
+  <camelContext id="camel" xmlns="http://camel.apache.org/schema/spring">
+
+    <route>
+      <from uri="file://network-guard/to-replica" />
+      <to uri="bean:replicaProxy" />
+    </route>
+
+  </camelContext>
+
+</beans>

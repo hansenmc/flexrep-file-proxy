@@ -16,3 +16,4 @@ bin/
 .gradle/
 .project
 .settings/
+network-guard/
